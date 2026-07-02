@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import SwiftUI
 
@@ -18,9 +19,36 @@ final class AppStore: ObservableObject {
     // Anchor date used by the calendar for week/day/month navigation.
     @Published var anchorDate = Date()
 
+    // refreshAll() can be triggered from several places in close succession
+    // (bootstrap, each tab's own .task, returning to foreground). Without
+    // this, a slow refresh kicked off before a clock-in can finish after it
+    // and overwrite fresh state with stale data — cancel any prior run first.
+    private var refreshTask: Task<Void, Never>?
+
+    private var sessionExpiredObserver: NSObjectProtocol?
+
+    private init() {
+        sessionExpiredObserver = NotificationCenter.default.addObserver(
+            forName: .sessionExpired, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in self?.handleSessionExpired() }
+        }
+    }
+
+    private func handleSessionExpired() {
+        guard isAuthenticated else { return }
+        logout()
+        errorMessage = "Your session expired. Please log in again."
+    }
+
     func bootstrap() async {
         if UserDefaults.standard.string(forKey: "auth_token") != nil {
             isAuthenticated = true
+            do {
+                profile = try await APIClient.shared.me()
+            } catch {
+                print("[AppStore] bootstrap profile fetch failed: \(error)")
+            }
             await refreshAll()
         }
     }
@@ -68,45 +96,91 @@ final class AppStore: ObservableObject {
     }
 
     func refreshAll() async {
-        await refreshOpenSession()
-        await refreshWeek()
-        await refreshDay()
-        await refreshEvents()
+        refreshTask?.cancel()
+        let task = Task {
+            await refreshOpenSession()
+            await refreshWeek()
+            await refreshDay()
+            await refreshEvents()
+        }
+        refreshTask = task
+        await task.value
     }
 
     func refreshOpenSession() async {
-        openSession = try? await APIClient.shared.clockState()
-        LocalStore.cacheOpenSession(openSession)
+        do {
+            let session = try await APIClient.shared.clockState()
+            openSession = session
+            LocalStore.cacheOpenSession(session)
+        } catch {
+            guard !isCancellation(error) else { return }
+            print("[AppStore] refreshOpenSession failed: \(error)")
+            errorMessage = "Couldn't refresh your clock status. Check your connection and that the server is running."
+        }
     }
 
     func refreshWeek() async {
-        let iso = isoDate(anchorDate)
-        weekly = try? await APIClient.shared.weeklySummary(weekStart: iso)
-        if let start = weekBounds(anchorDate).0, let end = weekBounds(anchorDate).1 {
-            sessions = (try? await APIClient.shared.sessions(start: start, end: end)) ?? []
+        do {
+            let iso = isoDate(anchorDate)
+            weekly = try await APIClient.shared.weeklySummary(weekStart: iso)
+            if let start = weekBounds(anchorDate).0, let end = weekBounds(anchorDate).1 {
+                sessions = try await APIClient.shared.sessions(start: start, end: end)
+            }
+        } catch {
+            guard !isCancellation(error) else { return }
+            print("[AppStore] refreshWeek failed: \(error)")
+            errorMessage = "Couldn't refresh this week's data. Check your connection and that the server is running."
         }
     }
 
     func refreshDay() async {
-        daily = try? await APIClient.shared.dailySummary(date: isoDate(anchorDate))
+        do {
+            daily = try await APIClient.shared.dailySummary(date: isoDate(anchorDate))
+        } catch {
+            guard !isCancellation(error) else { return }
+            print("[AppStore] refreshDay failed: \(error)")
+            errorMessage = "Couldn't refresh today's data. Check your connection and that the server is running."
+        }
     }
 
     func refreshEvents() async {
-        let cal = Calendar.current
-        let end = Date()
-        let start = cal.date(byAdding: .day, value: -30, to: end) ?? end
-        events = (try? await APIClient.shared.events(start: start, end: end)) ?? []
+        do {
+            let cal = Calendar.current
+            let end = Date()
+            let start = cal.date(byAdding: .day, value: -30, to: end) ?? end
+            events = try await APIClient.shared.events(start: start, end: end)
+        } catch {
+            guard !isCancellation(error) else { return }
+            print("[AppStore] refreshEvents failed: \(error)")
+            errorMessage = "Couldn't refresh recent events. Check your connection and that the server is running."
+        }
+    }
+
+    private func isCancellation(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        return false
     }
 
     func deleteSession(_ session: WorkSession) async {
-        try? await APIClient.shared.deleteSession(id: session.id)
+        do {
+            try await APIClient.shared.deleteSession(id: session.id)
+        } catch {
+            print("[AppStore] deleteSession failed: \(error)")
+            errorMessage = "Couldn't delete that session. Check your connection and that the server is running."
+        }
         await refreshAll()
     }
 
     func updateSession(_ id: String, start: Date, end: Date?, note: String) async {
         var changes: [String: String] = ["startUtc": ISO8601.string(start), "note": note]
         if let end { changes["endUtc"] = ISO8601.string(end) }
-        _ = try? await APIClient.shared.updateSession(id: id, changes: changes)
+        do {
+            _ = try await APIClient.shared.updateSession(id: id, changes: changes)
+        } catch {
+            print("[AppStore] updateSession failed: \(error)")
+            errorMessage = "Couldn't save that edit. Check your connection and that the server is running."
+        }
         await refreshAll()
     }
 

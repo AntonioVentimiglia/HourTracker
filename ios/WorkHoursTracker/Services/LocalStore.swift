@@ -4,14 +4,13 @@ import Foundation
 /// here first (so they work with no network and while the app is closed), then
 /// flushed to the backend when connectivity returns.
 ///
-/// Uses a shared App Group container so the App Intents extension and the main
-/// app read/write the same queue. Set the group id in both targets' entitlements.
+/// App Intents here compile into the main app target (there's no separate
+/// extension), so both Siri and the foreground UI already share the same
+/// sandbox — standard UserDefaults is enough. (This used to route through an
+/// App Group suite that was never actually registered, which made every
+/// read/write to it silently fail at the system level.)
 enum LocalStore {
-    static let appGroup = "group.com.example.workhourstracker"
-
-    private static var defaults: UserDefaults {
-        UserDefaults(suiteName: appGroup) ?? .standard
-    }
+    private static var defaults: UserDefaults { .standard }
 
     private static let queueKey = "queued_actions"
     private static let openSessionKey = "cached_open_session"

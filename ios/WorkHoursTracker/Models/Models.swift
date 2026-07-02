@@ -30,9 +30,12 @@ struct WorkSession: Codable, Identifiable, Equatable {
     var end: Date? { endUtc.flatMap { ISO8601.date($0) } }
     var isOpen: Bool { endUtc == nil && status != "deleted" }
 
+    // The server includes a pre-computed durationSeconds snapshot even for open
+    // sessions, so it's frozen at whatever it was when last fetched. Always
+    // compute live elapsed time client-side while the session is open instead.
     var liveDurationSeconds: Int {
-        if let d = durationSeconds { return d }
-        return Int(Date().timeIntervalSince(start))
+        if isOpen { return max(0, Int(Date().timeIntervalSince(start))) }
+        return durationSeconds ?? 0
     }
 }
 

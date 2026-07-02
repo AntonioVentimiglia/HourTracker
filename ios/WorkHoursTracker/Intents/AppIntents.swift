@@ -1,8 +1,26 @@
 import AppIntents
 
-/// ClockInIntent — starts a work session. Runs in the background (no app launch),
-/// accepts an optional note, and leaves the note parameter unresolved so Siri can
-/// ask "What are you working on?" as a robust two-turn flow for arbitrary dictation.
+/// Common decline phrases so a spoken/typed "no" doesn't get saved as literal
+/// note text — treated the same as staying silent or dismissing the prompt.
+private func isDecline(_ text: String) -> Bool {
+    let normalized = text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    return ["no", "nope", "no thanks", "nah", "not now", "nevermind", "never mind", "skip", "none", "no note"]
+        .contains(normalized)
+}
+
+/// Runs an ignorable follow-up value request. Any failure (decline, dismissal,
+/// timeout, the whole interaction being swiped away) is swallowed here and
+/// reported as "no value" — callers must not treat that as an error.
+private func askOptionalNote(_ resolve: () async throws -> String?) async -> String? {
+    guard let response = try? await resolve(), !response.isEmpty, !isDecline(response) else { return nil }
+    return response
+}
+
+/// ClockInIntent — starts a work session. Runs in the background (no app launch).
+/// The clock-in is written to the server before any follow-up runs, so a
+/// declined, ignored, or dismissed note prompt can never undo or fail it —
+/// worst case the user just gets no note attached, and can add one later
+/// with "Add a work note".
 struct ClockInIntent: AppIntent {
     static var title: LocalizedStringResource = "Clock In"
     static var description = IntentDescription("Start tracking your work time.")
@@ -10,16 +28,29 @@ struct ClockInIntent: AppIntent {
     // openAppWhenRun = false lets the action complete while the device is locked.
     static var openAppWhenRun: Bool = false
 
-    @Parameter(title: "Note", requestValueDialog: "What are you working on?")
+    @Parameter(title: "Note")
     var note: String?
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let result = await ClockService.clockIn(note: note)
+
+        guard note == nil else {
+            return .result(dialog: IntentDialog(stringLiteral: result.message))
+        }
+
+        if let addition = await askOptionalNote({
+            try await $note.requestValue(IntentDialog(stringLiteral: "\(result.message) Would you like to add a note?"))
+        }) {
+            await ClockService.addNote(addition)
+            return .result(dialog: IntentDialog(stringLiteral: "Noted: \(addition)."))
+        }
         return .result(dialog: IntentDialog(stringLiteral: result.message))
     }
 }
 
-/// ClockOutIntent — ends the current open session with an optional wrap-up note.
+/// ClockOutIntent — ends the current open session. Same ignorable-follow-up
+/// guarantee as ClockInIntent: the clock-out always happens (with whatever
+/// note we already have) even if the extra prompt is declined or dismissed.
 struct ClockOutIntent: AppIntent {
     static var title: LocalizedStringResource = "Clock Out"
     static var description = IntentDescription("Stop tracking your work time.")
@@ -29,7 +60,15 @@ struct ClockOutIntent: AppIntent {
     var note: String?
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let result = await ClockService.clockOut(note: note)
+        var finalNote = note
+        if finalNote == nil {
+            let hasExistingNote = LocalStore.cachedOpenSession()?.note?.isEmpty == false
+            let prompt = hasExistingNote
+                ? "Any additional notes to add?"
+                : "No note added, what did you work on?"
+            finalNote = await askOptionalNote({ try await $note.requestValue(IntentDialog(stringLiteral: prompt)) })
+        }
+        let result = await ClockService.clockOut(note: finalNote)
         return .result(dialog: IntentDialog(stringLiteral: result.message))
     }
 }
@@ -44,18 +83,7 @@ struct AddWorkNoteIntent: AppIntent {
     var note: String
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // Reuse clockIn's append behavior when clocked in via the server.
-        let today = await ClockService.todayHoursSpoken()
-        // A dedicated note push:
-        let action = QueuedAction(type: "note", note: note,
-                                  timestampUtc: ISO8601.string(Date()),
-                                  timezoneId: TimeZone.current.identifier,
-                                  source: "siri", deviceId: DeviceInfo.id,
-                                  appVersion: DeviceInfo.appVersion,
-                                  idempotencyKey: UUID().uuidString)
-        LocalStore.enqueue(action)
-        try? await APIClient.shared.pushQueued(LocalStore.queued())
-        _ = today
+        await ClockService.addNote(note)
         return .result(dialog: "Noted: \(note).")
     }
 }

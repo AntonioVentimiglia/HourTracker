@@ -1,5 +1,13 @@
 import Foundation
 
+extension Notification.Name {
+    /// Posted when the server rejects our token as belonging to a user that
+    /// no longer exists (e.g. the token predates a dev DB reseed). AppStore
+    /// observes this to drop back to the login screen instead of getting
+    /// stuck in a state where reads succeed but every write silently fails.
+    static let sessionExpired = Notification.Name("WorkHoursTracker.sessionExpired")
+}
+
 /// Talks to the shared backend. All timestamps are UTC; the timezone identifier
 /// travels with each write so the server can bucket days correctly.
 actor APIClient {
@@ -8,7 +16,8 @@ actor APIClient {
     /// Point this at your running backend. For the iOS Simulator on a Mac,
     /// `http://localhost:4000` reaches a server running on the same machine.
     /// For a physical device, use your Mac's LAN IP (e.g. http://192.168.1.20:4000).
-    var baseURL = URL(string: "http://localhost:4000")!
+//    var baseURL = URL(string: "http://localhost:4000")!
+     var baseURL = URL(string: "http://10.26.131.141:4000")!
 
     private var token: String? {
         get { UserDefaults.standard.string(forKey: "auth_token") }
@@ -19,7 +28,14 @@ actor APIClient {
     }
 
     private func request(_ path: String, method: String = "GET", body: Encodable? = nil, authed: Bool = true) async throws -> Data {
-        var req = URLRequest(url: baseURL.appendingPathComponent(path))
+        // appendingPathComponent percent-encodes "?", which mangles any path
+        // that already carries a query string (e.g. "/events?start=..."),
+        // turning it into a literal path segment the server 404s on.
+        // URL(string:relativeTo:) parses "?" as a real query delimiter instead.
+        guard let url = URL(string: path, relativeTo: baseURL) else {
+            throw APIError.badStatus("invalid request path: \(path)")
+        }
+        var req = URLRequest(url: url)
         req.httpMethod = method
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if authed, let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
@@ -28,6 +44,10 @@ actor APIClient {
         }
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            if authed, (resp as? HTTPURLResponse)?.statusCode == 401 {
+                setToken(nil)
+                NotificationCenter.default.post(name: .sessionExpired, object: nil)
+            }
             throw APIError.badStatus(String(data: data, encoding: .utf8) ?? "unknown")
         }
         return data
@@ -48,6 +68,12 @@ actor APIClient {
         let auth = try JSONDecoder().decode(AuthResponse.self, from: data)
         setToken(auth.token)
         return auth
+    }
+
+    func me() async throws -> UserProfile {
+        struct R: Codable { var user: UserProfile }
+        let data = try await request("/auth/me")
+        return try JSONDecoder().decode(R.self, from: data).user
     }
 
     // MARK: Clock

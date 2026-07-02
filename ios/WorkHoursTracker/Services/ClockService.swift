@@ -38,7 +38,11 @@ struct ClockService {
         LocalStore.cacheOpenSession(optimistic)
 
         // Best-effort immediate sync; failure just leaves it queued.
-        try? await APIClient.shared.pushQueued(LocalStore.queued())
+        do {
+            try await APIClient.shared.pushQueued(LocalStore.queued())
+        } catch {
+            print("[ClockService] pushQueued failed: \(error)")
+        }
         await refreshFromServer()
 
         let time = LocalTime.spoken(action.timestampUtc, zone: action.timezoneId)
@@ -77,6 +81,19 @@ struct ClockService {
         return Result(message: "Clocked out. You worked \(LocalTime.spokenDuration(seconds)).", session: nil)
     }
 
+    /// Standalone note push, shared by AddWorkNoteIntent and the clock-in/out
+    /// follow-up prompts. Attaches to the open session server-side if there is one.
+    static func addNote(_ note: String) async {
+        let action = QueuedAction(type: "note", note: note,
+                                  timestampUtc: ISO8601.string(Date()),
+                                  timezoneId: TimeZone.current.identifier,
+                                  source: "siri", deviceId: DeviceInfo.id,
+                                  appVersion: DeviceInfo.appVersion,
+                                  idempotencyKey: UUID().uuidString)
+        LocalStore.enqueue(action)
+        try? await APIClient.shared.pushQueued(LocalStore.queued())
+    }
+
     static func todayHoursSpoken() async -> String {
         let today = LocalTime.today()
         if let summary = try? await APIClient.shared.dailySummary(date: today) {
@@ -92,9 +109,14 @@ struct ClockService {
 
     /// Reconcile local cache with the server's canonical open-session state.
     static func refreshFromServer() async {
-        if let server = try? await APIClient.shared.clockState() {
-            LocalStore.cacheOpenSession(server)
-            LocalStore.clearQueue()
+        do {
+            let server = try await APIClient.shared.clockState()
+            if let server {
+                LocalStore.cacheOpenSession(server)
+                LocalStore.clearQueue()
+            }
+        } catch {
+            print("[ClockService] refreshFromServer failed: \(error)")
         }
     }
 }
