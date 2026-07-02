@@ -13,11 +13,14 @@ extension Notification.Name {
 actor APIClient {
     static let shared = APIClient()
 
-    /// Point this at your running backend. For the iOS Simulator on a Mac,
-    /// `http://localhost:4000` reaches a server running on the same machine.
-    /// For a physical device, use your Mac's LAN IP (e.g. http://192.168.1.20:4000).
-//    var baseURL = URL(string: "http://localhost:4000")!
-     var baseURL = URL(string: "http://10.26.131.141:4000")!
+    /// Debug builds (local dev/testing) talk to the Mac over LAN; Release
+    /// builds (what real users get, e.g. via sideload) talk to the hosted
+    /// Railway backend so the app works from any network, no Mac required.
+    #if DEBUG
+    var baseURL = URL(string: "http://10.26.131.141:4000")!
+    #else
+    var baseURL = URL(string: "https://hourtracker-production.up.railway.app")!
+    #endif
 
     private var token: String? {
         get { UserDefaults.standard.string(forKey: "auth_token") }
