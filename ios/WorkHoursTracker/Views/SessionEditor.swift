@@ -5,6 +5,9 @@ struct SessionEditor: View {
     @Environment(\.dismiss) var dismiss
 
     var session: WorkSession?
+    /// For a new session, the day to default the start/end onto (the calendar's
+    /// currently "chosen" day). Ignored when editing an existing session.
+    var defaultDate: Date? = nil
 
     @State private var start = Date()
     @State private var end = Date()
@@ -54,6 +57,10 @@ struct SessionEditor: View {
             start = s.start
             if let e = s.end { end = e; hasEnd = true } else { hasEnd = false; end = Date() }
             note = s.note ?? ""
+        } else if let d = defaultDate {
+            let cal = Calendar.current
+            start = cal.date(bySettingHour: 9, minute: 0, second: 0, of: d) ?? d
+            end = cal.date(bySettingHour: 9, minute: 15, second: 0, of: d) ?? d
         } else {
             start = Calendar.current.date(byAdding: .hour, value: -1, to: Date()) ?? Date()
             end = Date()

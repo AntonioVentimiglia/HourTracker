@@ -7,6 +7,12 @@ struct CalendarTab: View {
     @State private var mode: CalendarMode = .month
     @State private var editing: WorkSession?
     @State private var creatingNew = false
+    // Whether the "chosen" day is the second (right) of the two shown days.
+    // The pair is always [anchorDate, anchorDate+1].
+    @State private var chosenIsSecondDay = false
+
+    private var anchor: Date { store.anchorDate }
+    private var chosenDay: Date { chosenIsSecondDay ? TimeMath.add(days: 1, to: anchor) : anchor }
 
     var body: some View {
         NavigationStack {
@@ -17,16 +23,22 @@ struct CalendarTab: View {
                 .pickerStyle(.segmented)
                 .padding([.horizontal, .top])
 
-                header
-
                 switch mode {
                 case .month:
-                    MonthGrid(anchor: store.anchorDate) { day in
+                    monthHeader
+                    MonthGrid(anchor: anchor) { day in
                         store.anchorDate = day
+                        chosenIsSecondDay = false
                         withAnimation { mode = .day }
                     }
                 case .day:
-                    TwoDayTimeline(anchor: store.anchorDate, onTap: { editing = $0 })
+                    WeekStrip(week: TimeMath.weekDays(containing: anchor,
+                                                      firstWeekday: (store.profile?.weekStartsOn ?? 0) + 1),
+                              pairStart: anchor,
+                              chosen: chosenDay,
+                              onTapDay: selectDay,
+                              onShiftWeek: { store.anchorDate = TimeMath.add(days: $0 * 7, to: anchor) })
+                    TwoDayTimeline(anchor: anchor, chosen: chosenDay, onTap: { editing = $0 })
                 }
             }
             .background(Color(.systemGroupedBackground))
@@ -43,49 +55,111 @@ struct CalendarTab: View {
                 }
             }
             .sheet(item: $editing) { s in SessionEditor(session: s) }
-            .sheet(isPresented: $creatingNew) { SessionEditor(session: nil) }
+            .sheet(isPresented: $creatingNew) {
+                SessionEditor(session: nil, defaultDate: mode == .day ? chosenDay : nil)
+            }
             .task(id: store.anchorDate) { await store.refreshAll() }
         }
     }
 
-    var header: some View {
+    /// Tap in the week strip: choose a shown day (keep pair), or re-anchor to a
+    /// new [tapped, tapped+1] pair when tapping a day outside the current two.
+    func selectDay(_ day: Date) {
+        let cal = Calendar.current
+        if cal.isDate(day, inSameDayAs: anchor) {
+            chosenIsSecondDay = false
+        } else if cal.isDate(day, inSameDayAs: TimeMath.add(days: 1, to: anchor)) {
+            chosenIsSecondDay = true
+        } else {
+            store.anchorDate = cal.startOfDay(for: day)
+            chosenIsSecondDay = false
+        }
+    }
+
+    var monthHeader: some View {
         HStack {
-            Button { shift(-1) } label: { Image(systemName: "chevron.left").font(.headline) }
-            Spacer()
-            VStack(spacing: 2) {
-                Text(title).font(.headline)
-                Text(subtitle).font(.caption).foregroundStyle(.indigo)
+            Button { store.anchorDate = TimeMath.add(months: -1, to: anchor) } label: {
+                Image(systemName: "chevron.left").font(.headline)
             }
             Spacer()
-            Button { shift(1) } label: { Image(systemName: "chevron.right").font(.headline) }
+            VStack(spacing: 2) {
+                Text(anchor.formatted(.dateTime.month(.wide).year())).font(.headline)
+                let billed = store.billingBlocks.filter {
+                    Calendar.current.isDate($0.start, equalTo: anchor, toGranularity: .month)
+                }.count * 900
+                Text("Billed \(Format.decimalHours(billed)) this month")
+                    .font(.caption).foregroundStyle(.indigo)
+            }
+            Spacer()
+            Button { store.anchorDate = TimeMath.add(months: 1, to: anchor) } label: {
+                Image(systemName: "chevron.right").font(.headline)
+            }
         }
         .padding(.horizontal).padding(.vertical, 8)
     }
+}
 
-    var title: String {
-        let f = DateFormatter()
-        f.dateFormat = mode == .month ? "MMMM yyyy" : "EEE, MMM d"
-        return f.string(from: store.anchorDate)
+// MARK: - Week strip (day-view top bar)
+
+struct WeekStrip: View {
+    @EnvironmentObject var store: AppStore
+    var week: [Date]            // 7 days
+    var pairStart: Date         // left day of the shown pair
+    var chosen: Date
+    var onTapDay: (Date) -> Void
+    var onShiftWeek: (Int) -> Void
+
+    private var pairIndex: Int? {
+        week.firstIndex { Calendar.current.isDate($0, inSameDayAs: pairStart) }
     }
 
-    var subtitle: String {
-        switch mode {
-        case .month:
-            let billed = store.billingBlocks.filter {
-                Calendar.current.isDate($0.start, equalTo: store.anchorDate, toGranularity: .month)
-            }.count * 900
-            return "Billed \(Format.decimalHours(billed)) this month"
-        case .day:
-            let days = [store.anchorDate, TimeMath.add(days: 1, to: store.anchorDate)]
-            let billed = days.reduce(0) { $0 + store.blocks(on: $1).count * 900 }
-            return "Billed \(Format.decimalHours(billed)) shown"
+    var body: some View {
+        HStack(spacing: 4) {
+            Button { onShiftWeek(-1) } label: { Image(systemName: "chevron.left") }
+            GeometryReader { geo in
+                let cellW = geo.size.width / 7
+                ZStack(alignment: .leading) {
+                    // Shaded oval spanning the two shown days.
+                    if let i = pairIndex {
+                        let width = cellW * CGFloat(min(2, 7 - i))
+                        Capsule().fill(Color.indigo.opacity(0.15))
+                            .frame(width: width - 4, height: 52)
+                            .offset(x: cellW * CGFloat(i) + 2)
+                    }
+                    HStack(spacing: 0) {
+                        ForEach(week, id: \.self) { day in
+                            DayPip(day: day, isChosen: Calendar.current.isDate(day, inSameDayAs: chosen))
+                                .frame(width: cellW)
+                                .contentShape(Rectangle())
+                                .onTapGesture { onTapDay(day) }
+                        }
+                    }
+                }
+            }
+            .frame(height: 56)
+            Button { onShiftWeek(1) } label: { Image(systemName: "chevron.right") }
         }
+        .padding(.horizontal, 12).padding(.vertical, 4)
     }
+}
 
-    func shift(_ n: Int) {
-        let comp: Calendar.Component = mode == .month ? .month : .day
-        let step = mode == .day ? n * 2 : n
-        store.anchorDate = Calendar.current.date(byAdding: comp, value: step, to: store.anchorDate) ?? store.anchorDate
+struct DayPip: View {
+    @EnvironmentObject var store: AppStore
+    var day: Date
+    var isChosen: Bool
+
+    var body: some View {
+        let hasActivity = !store.blocks(on: day).isEmpty
+        VStack(spacing: 3) {
+            Text(TimeMath.weekdayLetter(day))
+                .font(.caption2).foregroundStyle(.secondary)
+            Text(Format.dayNum(day))
+                .font(.subheadline.weight(isChosen ? .bold : .regular))
+                .foregroundStyle(isChosen ? .white : Color(.label))
+                .frame(width: 30, height: 30)
+                .background(isChosen ? Color.indigo : Color.clear, in: Circle())
+            Circle().fill(hasActivity ? Color.indigo : .clear).frame(width: 4, height: 4)
+        }
     }
 }
 
@@ -229,6 +303,7 @@ struct MonthDayCell: View {
 struct TwoDayTimeline: View {
     @EnvironmentObject var store: AppStore
     var anchor: Date
+    var chosen: Date
     var onTap: (WorkSession) -> Void
 
     private let hourHeight: CGFloat = 52
@@ -277,6 +352,8 @@ struct TwoDayTimeline: View {
                                   endHour: window.end,
                                   onTap: onTap)
                             .frame(maxWidth: .infinity)
+                            .background(Calendar.current.isDate(day, inSameDayAs: chosen)
+                                        ? Color.indigo.opacity(0.04) : .clear)
                         Divider()
                     }
                 }
@@ -293,17 +370,21 @@ struct TwoDayTimeline: View {
                 let billed = store.blocks(on: day).count * 900
                 let raw = store.sessions.filter { Calendar.current.isDate($0.start, inSameDayAs: day) }
                     .reduce(0) { $0 + $1.liveDurationSeconds }
+                let isChosen = Calendar.current.isDate(day, inSameDayAs: chosen)
                 VStack(spacing: 2) {
                     Text(TimeMath.weekdayFull(day))
-                        .font(.subheadline.weight(Calendar.current.isDateInToday(day) ? .bold : .semibold))
-                        .foregroundStyle(Calendar.current.isDateInToday(day) ? .red : .primary)
+                        .font(.subheadline.weight(isChosen ? .bold : .semibold))
+                        .foregroundStyle(Calendar.current.isDateInToday(day) ? .red : (isChosen ? .indigo : .primary))
                     HStack(spacing: 6) {
                         Text(Format.decimalHours(billed)).foregroundStyle(.indigo).fontWeight(.semibold)
                         Text("· \(Format.duration(raw))").foregroundStyle(.secondary)
                     }
-                    .font(.caption2)
+                    .font(isChosen ? .caption.weight(.semibold) : .caption2)
                 }
                 .frame(maxWidth: .infinity)
+                .overlay(alignment: .bottom) {
+                    if isChosen { Capsule().fill(Color.indigo).frame(width: 28, height: 2).offset(y: 4) }
+                }
             }
         }
         .frame(height: 44)
@@ -340,17 +421,23 @@ struct DayColumn: View {
                 Rectangle().fill(Color(.separator).opacity(0.4)).frame(height: 0.5)
                     .offset(y: CGFloat(h - startHour) * hourHeight)
             }
-            // Billed 15-min blocks (light, stretched over their time span)
+            // Billed 15-min blocks: light bordered containers, each stretched
+            // over the 15 minutes it owns, tiled so every block is a distinct
+            // outlined cell even under a long session.
             ForEach(blocks) { b in
                 RoundedRectangle(cornerRadius: 4)
                     .fill(Palette.billed)
-                    .frame(height: span(b.start, b.end))
+                    .overlay(RoundedRectangle(cornerRadius: 4)
+                        .stroke(Color.indigo.opacity(0.4), lineWidth: 1))
+                    .frame(height: span(b.start, b.end) - 1)
                     .padding(.horizontal, 2)
                     .offset(y: yFor(b.start))
             }
-            // Raw sessions (solid, same hue) on top
+            // Raw sessions: solid box drawn INSET inside its billed block(s), so
+            // the surrounding 15-min block stays visible around it (nested look).
             ForEach(sessions) { s in
                 SessionBox(session: s, height: span(s.start, s.end ?? Date()))
+                    .padding(.horizontal, 12)
                     .offset(y: yFor(s.start))
                     .onTapGesture { onTap(s) }
             }
@@ -393,9 +480,8 @@ struct SessionBox: View {
         }
         .padding(.horizontal, 5).padding(.vertical, 2)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
-        .background(Palette.raw.opacity(session.isOpen ? 0.75 : 0.9), in: RoundedRectangle(cornerRadius: 5))
-        .overlay(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.5), lineWidth: 0.5))
-        .padding(.trailing, 8)
+        .background(Palette.raw.opacity(session.isOpen ? 0.8 : 0.95), in: RoundedRectangle(cornerRadius: 5))
+        .overlay(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.6), lineWidth: 0.5))
     }
 }
 
@@ -413,6 +499,25 @@ struct NowLine: View {
 enum TimeMath {
     static func add(days: Int, to date: Date) -> Date {
         Calendar.current.date(byAdding: .day, value: days, to: date) ?? date
+    }
+
+    static func add(months: Int, to date: Date) -> Date {
+        Calendar.current.date(byAdding: .month, value: months, to: date) ?? date
+    }
+
+    /// The 7 days of the week containing `date`, starting on `firstWeekday`.
+    static func weekDays(containing date: Date, firstWeekday: Int) -> [Date] {
+        var cal = Calendar.current
+        cal.firstWeekday = firstWeekday
+        let weekday = cal.component(.weekday, from: date)
+        let offset = (weekday - firstWeekday + 7) % 7
+        let start = cal.date(byAdding: .day, value: -offset, to: cal.startOfDay(for: date)) ?? date
+        return (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
+    }
+
+    static func weekdayLetter(_ date: Date) -> String {
+        let f = DateFormatter(); f.dateFormat = "EEEEE" // single letter (S, M, T…)
+        return f.string(from: date)
     }
 
     static func monthWeeks(around date: Date, firstWeekday: Int) -> [[Date]] {

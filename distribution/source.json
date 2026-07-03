@@ -10,6 +10,14 @@
       "iconURL": "https://raw.githubusercontent.com/AntonioVentimiglia/HourTracker/main/distribution/icon.png",
       "versions": [
         {
+          "version": "1.2",
+          "buildVersion": "3",
+          "date": "2026-07-03T22:30:00Z",
+          "localizedDescription": "Calendar redesign: Apple-style month grid and a two-day timeline with a week strip, nested 15-minute billed blocks, and a current-time line.",
+          "downloadURL": "https://raw.githubusercontent.com/AntonioVentimiglia/HourTracker/main/distribution/WorkHoursTracker.ipa",
+          "size": 452638
+        },
+        {
           "version": "1.1",
           "buildVersion": "2",
           "date": "2026-07-03T21:58:42Z",
