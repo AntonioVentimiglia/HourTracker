@@ -17,6 +17,7 @@ struct WorkSession: Codable, Identifiable, Equatable {
     var endTimezoneId: String?
     var durationSeconds: Int?
     var note: String?
+    var color: String?
     var status: String
     var source: String
     var needsReview: Bool

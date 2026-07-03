@@ -203,9 +203,11 @@ final class AppStore: ObservableObject {
         await refreshAll()
     }
 
-    func updateSession(_ id: String, start: Date, end: Date?, note: String) async {
+    func updateSession(_ id: String, start: Date, end: Date?, note: String, color: String?) async {
         var changes: [String: String] = ["startUtc": ISO8601.string(start), "note": note]
         if let end { changes["endUtc"] = ISO8601.string(end) }
+        // Empty string clears the color server-side (back to default indigo).
+        changes["color"] = color ?? ""
         do {
             _ = try await APIClient.shared.updateSession(id: id, changes: changes)
         } catch {

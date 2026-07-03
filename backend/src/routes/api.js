@@ -62,10 +62,10 @@ router.get('/sessions', (req, res) => {
 });
 
 router.post('/sessions', (req, res) => {
-  const { startUtc, endUtc, timezoneId, note, source } = req.body || {};
+  const { startUtc, endUtc, timezoneId, note, color, source } = req.body || {};
   const { zone } = userZone(req.userId);
   if (!startUtc) return res.status(400).json({ error: 'startUtc required' });
-  res.json({ session: S.createManualSession({ userId: req.userId, startUtc, endUtc, timezoneId: timezoneId || zone, note, source: source || 'app' }) });
+  res.json({ session: S.createManualSession({ userId: req.userId, startUtc, endUtc, timezoneId: timezoneId || zone, note, color, source: source || 'app' }) });
 });
 
 router.get('/sessions/:id', (req, res) => {

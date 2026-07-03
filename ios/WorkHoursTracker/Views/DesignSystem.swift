@@ -108,3 +108,35 @@ enum Palette {
     static let raw = Color.indigo
     static let billed = Color.indigo.opacity(0.22)
 }
+
+extension Color {
+    /// Parse "#RRGGBB" (or "RRGGBB"). Falls back to the default hue if malformed.
+    init(hex: String) {
+        let s = hex.trimmingCharacters(in: CharacterSet(charactersIn: "# ")).uppercased()
+        var v: UInt64 = 0
+        guard s.count == 6, Scanner(string: s).scanHexInt64(&v) else { self = .indigo; return }
+        self.init(red: Double((v >> 16) & 0xFF) / 255,
+                  green: Double((v >> 8) & 0xFF) / 255,
+                  blue: Double(v & 0xFF) / 255)
+    }
+}
+
+/// Optional per-activity colors. `nil`/empty = the default indigo, so existing
+/// sessions and Siri clock-ins keep the original look.
+enum ActivityPalette {
+    /// Selectable non-default colors (the default is offered separately).
+    static let options: [(name: String, hex: String)] = [
+        ("Blue",   "#0A84FF"),
+        ("Teal",   "#30B0C7"),
+        ("Green",  "#34C759"),
+        ("Orange", "#FF9500"),
+        ("Red",    "#FF3B30"),
+        ("Pink",   "#FF2D55"),
+        ("Purple", "#AF52DE"),
+    ]
+
+    static func color(_ hex: String?) -> Color {
+        guard let hex, !hex.isEmpty else { return Palette.raw }
+        return Color(hex: hex)
+    }
+}

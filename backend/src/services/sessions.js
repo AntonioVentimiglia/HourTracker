@@ -57,14 +57,16 @@ function computeWarnings(session) {
   return warnings;
 }
 
-function persistWarnings(session) {
-  const warnings = computeWarnings(session);
-  const needsReview = warnings.includes('open_too_long') ? 1 : session.needs_review;
+// Takes ids and re-reads the raw DB row, because computeWarnings and the
+// needs_review flag are keyed on snake_case columns — passing a serialized
+// (camelCase) session here leaves those undefined and breaks the UPDATE bind.
+function persistWarnings(userId, sessionId) {
+  const row = getSessionRow(userId, sessionId);
+  const warnings = computeWarnings(row);
+  const needsReview = warnings.includes('open_too_long') ? 1 : row.needs_review;
   db.prepare(`UPDATE work_sessions SET validation_warnings = ?, needs_review = ? WHERE id = ?`)
-    .run(JSON.stringify(warnings), needsReview, session.id);
-  session.validation_warnings = JSON.stringify(warnings);
-  session.needs_review = needsReview;
-  return session;
+    .run(JSON.stringify(warnings), needsReview, sessionId);
+  return getSession(userId, sessionId);
 }
 
 // Duplicate clock-in is prevented by default: if already clocked in we do not
@@ -128,7 +130,7 @@ export function clockOut({ userId, timestampUtc, timezoneId, note, source, devic
   `).run(timestampUtc, timezoneId, dur, mergedNote, nowIso(), seq, open.id);
 
   recordEvent({ userId, sessionId: open.id, type: 'clock_out', timestampUtc, timezoneId, note, source, deviceId, appVersion });
-  const session = persistWarnings(getSession(userId, open.id));
+  const session = persistWarnings(userId, open.id);
 
   return {
     status: 'clocked_out',
@@ -153,7 +155,7 @@ export function addNote({ userId, note, timestampUtc, timezoneId, source, device
   return { status: 'note_added', session: getSession(userId, open.id), message: 'Note added.' };
 }
 
-export function createManualSession({ userId, startUtc, endUtc, timezoneId, note, source }) {
+export function createManualSession({ userId, startUtc, endUtc, timezoneId, note, color, source }) {
   const id = uuid();
   const dur = durationSeconds(startUtc, endUtc);
   const status = endUtc ? 'closed' : 'open';
@@ -161,15 +163,15 @@ export function createManualSession({ userId, startUtc, endUtc, timezoneId, note
   db.prepare(`
     INSERT INTO work_sessions
       (id, user_id, start_utc, end_utc, start_timezone_id, end_timezone_id,
-       duration_seconds, note, status, source, created_at, updated_at, updated_seq)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       duration_seconds, note, color, status, source, created_at, updated_at, updated_seq)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(id, userId, startUtc, endUtc || null, timezoneId, endUtc ? timezoneId : null,
-         dur, note || null, status, source || 'app', nowIso(), nowIso(), seq);
+         dur, note || null, color || null, status, source || 'app', nowIso(), nowIso(), seq);
   recordEvent({ userId, sessionId: id, type: 'session_created', timestampUtc: startUtc, timezoneId, note, source: source || 'app' });
-  return persistWarnings(getSession(userId, id));
+  return persistWarnings(userId, id);
 }
 
-const EDITABLE_FIELDS = { startUtc: 'start_utc', endUtc: 'end_utc', note: 'note', status: 'status' };
+const EDITABLE_FIELDS = { startUtc: 'start_utc', endUtc: 'end_utc', note: 'note', color: 'color', status: 'status' };
 
 export function updateSession({ userId, sessionId, changes, source, reason }) {
   const existing = getSessionRow(userId, sessionId);
@@ -192,7 +194,7 @@ export function updateSession({ userId, sessionId, changes, source, reason }) {
     .run(dur, status, nowIso(), nextSeq(), sessionId);
   recordEvent({ userId, sessionId, type: 'session_edited', timestampUtc: nowIso(),
                 timezoneId: updated.start_timezone_id, source: source || 'web' });
-  return persistWarnings(getSession(userId, sessionId));
+  return persistWarnings(userId, sessionId);
 }
 
 export function deleteSession({ userId, sessionId, source }) {
@@ -265,6 +267,7 @@ function serializeSession(row) {
     durationSeconds: row.duration_seconds ??
       (row.status === 'open' ? durationSeconds(row.start_utc, nowIso()) : null),
     note: row.note,
+    color: row.color,
     status: row.status,
     source: row.source,
     needsReview: !!row.needs_review,

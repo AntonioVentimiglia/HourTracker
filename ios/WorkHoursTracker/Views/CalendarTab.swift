@@ -10,9 +10,12 @@ struct CalendarTab: View {
     // Whether the "chosen" day is the second (right) of the two shown days.
     // The pair is always [anchorDate, anchorDate+1].
     @State private var chosenIsSecondDay = false
+    // Collapse the day view from two days down to just the chosen day.
+    @State private var singleDay = false
 
     private var anchor: Date { store.anchorDate }
-    private var chosenDay: Date { chosenIsSecondDay ? TimeMath.add(days: 1, to: anchor) : anchor }
+    private var chosenDay: Date { (chosenIsSecondDay && !singleDay) ? TimeMath.add(days: 1, to: anchor) : anchor }
+    private var daysShown: [Date] { singleDay ? [chosenDay] : [anchor, TimeMath.add(days: 1, to: anchor)] }
 
     var body: some View {
         NavigationStack {
@@ -32,19 +35,31 @@ struct CalendarTab: View {
                         withAnimation { mode = .day }
                     }
                 case .day:
-                    WeekStrip(week: TimeMath.weekDays(containing: anchor,
+                    WeekStrip(week: TimeMath.weekDays(containing: chosenDay,
                                                       firstWeekday: (store.profile?.weekStartsOn ?? 0) + 1),
-                              pairStart: anchor,
+                              pairStart: singleDay ? chosenDay : anchor,
+                              pairCount: singleDay ? 1 : 2,
                               chosen: chosenDay,
                               onTapDay: selectDay,
                               onShiftWeek: { store.anchorDate = TimeMath.add(days: $0 * 7, to: anchor) })
-                    TwoDayTimeline(anchor: anchor, chosen: chosenDay, onTap: { editing = $0 })
+                    TwoDayTimeline(days: daysShown, chosen: chosenDay, onTap: { editing = $0 })
                 }
             }
             .background(Color(.systemGroupedBackground))
             .navigationTitle("Calendar")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                if mode == .day {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            withAnimation { singleDay.toggle() }
+                        } label: {
+                            // Icon shows the layout you'll switch TO.
+                            Image(systemName: singleDay ? "rectangle.split.2x1" : "rectangle.portrait")
+                        }
+                        .accessibilityLabel(singleDay ? "Show two days" : "Show one day")
+                    }
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { creatingNew = true } label: { Image(systemName: "plus") }
                 }
@@ -66,7 +81,10 @@ struct CalendarTab: View {
     /// new [tapped, tapped+1] pair when tapping a day outside the current two.
     func selectDay(_ day: Date) {
         let cal = Calendar.current
-        if cal.isDate(day, inSameDayAs: anchor) {
+        if singleDay {
+            store.anchorDate = cal.startOfDay(for: day)
+            chosenIsSecondDay = false
+        } else if cal.isDate(day, inSameDayAs: anchor) {
             chosenIsSecondDay = false
         } else if cal.isDate(day, inSameDayAs: TimeMath.add(days: 1, to: anchor)) {
             chosenIsSecondDay = true
@@ -105,6 +123,7 @@ struct WeekStrip: View {
     @EnvironmentObject var store: AppStore
     var week: [Date]            // 7 days
     var pairStart: Date         // left day of the shown pair
+    var pairCount: Int = 2      // how many days are shown (1 or 2)
     var chosen: Date
     var onTapDay: (Date) -> Void
     var onShiftWeek: (Int) -> Void
@@ -119,9 +138,9 @@ struct WeekStrip: View {
             GeometryReader { geo in
                 let cellW = geo.size.width / 7
                 ZStack(alignment: .leading) {
-                    // Shaded oval spanning the two shown days.
+                    // Shaded oval spanning the shown day(s).
                     if let i = pairIndex {
-                        let width = cellW * CGFloat(min(2, 7 - i))
+                        let width = cellW * CGFloat(min(pairCount, 7 - i))
                         Capsule().fill(Color.indigo.opacity(0.15))
                             .frame(width: width - 4, height: 52)
                             .offset(x: cellW * CGFloat(i) + 2)
@@ -271,7 +290,7 @@ struct MonthDayCell: View {
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, 3).padding(.vertical, 1)
-                        .background(Palette.raw, in: RoundedRectangle(cornerRadius: 3))
+                        .background(ActivityPalette.color(item.session.color), in: RoundedRectangle(cornerRadius: 3))
                 }
                 if perSessionBilled.count > 3 {
                     Text("+\(perSessionBilled.count - 3)")
@@ -302,13 +321,17 @@ struct MonthDayCell: View {
 
 struct TwoDayTimeline: View {
     @EnvironmentObject var store: AppStore
-    var anchor: Date
+    var days: [Date]
     var chosen: Date
     var onTap: (WorkSession) -> Void
 
-    private let hourHeight: CGFloat = 52
+    // Pinch to zoom the hour spacing. baseHourHeight persists the zoom; the
+    // live pinch multiplies it, clamped to a readable range.
+    @State private var baseHourHeight: CGFloat = 52
+    @GestureState private var pinch: CGFloat = 1
+    private var hourHeight: CGFloat { min(150, max(30, baseHourHeight * pinch)) }
+
     private let gutter: CGFloat = 48
-    private var days: [Date] { [anchor, TimeMath.add(days: 1, to: anchor)] }
 
     private func sessions(on day: Date) -> [WorkSession] {
         store.sessions.filter { Calendar.current.isDate($0.start, inSameDayAs: day) }
@@ -352,7 +375,7 @@ struct TwoDayTimeline: View {
                                   endHour: window.end,
                                   onTap: onTap)
                             .frame(maxWidth: .infinity)
-                            .background(Calendar.current.isDate(day, inSameDayAs: chosen)
+                            .background(days.count > 1 && Calendar.current.isDate(day, inSameDayAs: chosen)
                                         ? Color.indigo.opacity(0.04) : .clear)
                         Divider()
                     }
@@ -360,6 +383,11 @@ struct TwoDayTimeline: View {
                 .frame(height: timelineHeight)
                 Color.clear.frame(height: 130)
             }
+            .gesture(
+                MagnifyGesture()
+                    .updating($pinch) { value, state, _ in state = value.magnification }
+                    .onEnded { baseHourHeight = min(150, max(30, baseHourHeight * $0.magnification)) }
+            )
         }
     }
 
@@ -414,6 +442,12 @@ struct DayColumn: View {
     var endHour: Int
     var onTap: (WorkSession) -> Void
 
+    /// Color of the session that produced a given billed block, so a block is
+    /// tinted to match the raw activity that caused it.
+    private var colorForSession: [String: String?] {
+        Dictionary(sessions.map { ($0.id, $0.color) }, uniquingKeysWith: { a, _ in a })
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Hour gridlines
@@ -423,12 +457,14 @@ struct DayColumn: View {
             }
             // Billed 15-min blocks: light bordered containers, each stretched
             // over the 15 minutes it owns, tiled so every block is a distinct
-            // outlined cell even under a long session.
+            // outlined cell even under a long session. Tinted to the raw
+            // activity's color.
             ForEach(blocks) { b in
+                let hue = ActivityPalette.color(colorForSession[b.sessionId ?? ""] ?? nil)
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(Palette.billed)
+                    .fill(hue.opacity(0.22))
                     .overlay(RoundedRectangle(cornerRadius: 4)
-                        .stroke(Color.indigo.opacity(0.4), lineWidth: 1))
+                        .stroke(hue.opacity(0.45), lineWidth: 1))
                     .frame(height: span(b.start, b.end) - 1)
                     .padding(.horizontal, 2)
                     .offset(y: yFor(b.start))
@@ -480,7 +516,8 @@ struct SessionBox: View {
         }
         .padding(.horizontal, 5).padding(.vertical, 2)
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height, alignment: .topLeading)
-        .background(Palette.raw.opacity(session.isOpen ? 0.8 : 0.95), in: RoundedRectangle(cornerRadius: 5))
+        .background(ActivityPalette.color(session.color).opacity(session.isOpen ? 0.8 : 0.95),
+                    in: RoundedRectangle(cornerRadius: 5))
         .overlay(RoundedRectangle(cornerRadius: 5).stroke(.white.opacity(0.6), lineWidth: 0.5))
     }
 }

@@ -13,6 +13,7 @@ struct SessionEditor: View {
     @State private var end = Date()
     @State private var hasEnd = true
     @State private var note = ""
+    @State private var color: String? = nil   // nil = default indigo
 
     var isNew: Bool { session == nil }
 
@@ -27,6 +28,19 @@ struct SessionEditor: View {
                 Section("Note") {
                     TextField("What were you working on?", text: $note, axis: .vertical)
                         .lineLimit(2...5)
+                }
+                Section("Color") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 14) {
+                            ColorSwatch(color: Palette.raw, label: "Default",
+                                        selected: (color ?? "").isEmpty) { color = nil }
+                            ForEach(ActivityPalette.options, id: \.hex) { opt in
+                                ColorSwatch(color: Color(hex: opt.hex), label: opt.name,
+                                            selected: color == opt.hex) { color = opt.hex }
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
                 }
                 if hasEnd && end <= start {
                     Text("End time must be after start time.")
@@ -57,6 +71,7 @@ struct SessionEditor: View {
             start = s.start
             if let e = s.end { end = e; hasEnd = true } else { hasEnd = false; end = Date() }
             note = s.note ?? ""
+            color = (s.color?.isEmpty == false) ? s.color : nil
         } else if let d = defaultDate {
             let cal = Calendar.current
             start = cal.date(bySettingHour: 9, minute: 0, second: 0, of: d) ?? d
@@ -69,13 +84,38 @@ struct SessionEditor: View {
 
     func save() async {
         if let s = session {
-            await store.updateSession(s.id, start: start, end: hasEnd ? end : nil, note: note)
+            await store.updateSession(s.id, start: start, end: hasEnd ? end : nil, note: note, color: color)
         } else {
             _ = try? await APIClient.shared.createSession(startUtc: ISO8601.string(start),
                                                           endUtc: hasEnd ? ISO8601.string(end) : nil,
-                                                          note: note)
+                                                          note: note, color: color)
             await store.refreshAll()
         }
         dismiss()
+    }
+}
+
+/// A tappable color choice in the editor.
+struct ColorSwatch: View {
+    var color: Color
+    var label: String
+    var selected: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                ZStack {
+                    Circle().fill(color).frame(width: 34, height: 34)
+                    if selected {
+                        Circle().stroke(color, lineWidth: 2).frame(width: 42, height: 42)
+                        Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white)
+                    }
+                }
+                .frame(height: 44)
+                Text(label).font(.caption2).foregroundStyle(selected ? .primary : .secondary)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }

@@ -32,7 +32,7 @@ struct ClockService {
         let optimistic = WorkSession(
             id: "local-\(action.idempotencyKey)", userId: "", startUtc: action.timestampUtc,
             endUtc: nil, startTimezoneId: action.timezoneId, endTimezoneId: nil,
-            durationSeconds: nil, note: note, status: "open", source: "siri",
+            durationSeconds: nil, note: note, color: nil, status: "open", source: "siri",
             needsReview: false, validationWarnings: [], createdAt: action.timestampUtc,
             updatedAt: action.timestampUtc, deletedAt: nil, updatedSeq: nil)
         LocalStore.cacheOpenSession(optimistic)

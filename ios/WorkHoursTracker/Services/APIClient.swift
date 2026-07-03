@@ -165,13 +165,14 @@ actor APIClient {
         var endUtc: String?
         var timezoneId: String
         var note: String?
+        var color: String?
         var source: String
     }
 
-    func createSession(startUtc: String, endUtc: String?, note: String?) async throws -> WorkSession {
+    func createSession(startUtc: String, endUtc: String?, note: String?, color: String?) async throws -> WorkSession {
         struct R: Codable { var session: WorkSession }
         let body = CreateBody(startUtc: startUtc, endUtc: endUtc,
-                              timezoneId: TimeZone.current.identifier, note: note, source: "app")
+                              timezoneId: TimeZone.current.identifier, note: note, color: color, source: "app")
         let data = try await request("/sessions", method: "POST", body: body)
         return try JSONDecoder().decode(R.self, from: data).session
     }

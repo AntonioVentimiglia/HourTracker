@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS work_sessions (
   end_timezone_id     TEXT,
   duration_seconds    INTEGER,            -- cached; NULL while open
   note                TEXT,
+  color               TEXT,               -- optional hex like #34C759; null = default
   status              TEXT NOT NULL DEFAULT 'open', -- open | closed | needs_review | deleted
   source              TEXT NOT NULL DEFAULT 'app',
   needs_review        INTEGER NOT NULL DEFAULT 0,
@@ -109,6 +110,16 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user_seq   ON work_sessions(user_id, upd
 CREATE INDEX IF NOT EXISTS idx_events_user_ts       ON clock_events(user_id, timestamp_utc);
 CREATE INDEX IF NOT EXISTS idx_history_entity       ON edit_history(entity_type, entity_id);
 `);
+
+// Lightweight migrations for columns added after a table already exists on a
+// deployed volume (CREATE TABLE IF NOT EXISTS won't add new columns).
+function ensureColumn(table, column, definition) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+ensureColumn('work_sessions', 'color', 'TEXT');
 
 export function nextSeq() {
   const row = db.prepare('UPDATE sync_counter SET seq = seq + 1 WHERE id = 1 RETURNING seq').get();
