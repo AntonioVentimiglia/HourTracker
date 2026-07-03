@@ -128,9 +128,14 @@ final class AppStore: ObservableObject {
         do {
             let iso = isoDate(anchorDate)
             weekly = try await APIClient.shared.weeklySummary(weekStart: iso)
-            if let start = weekBounds(anchorDate).0, let end = weekBounds(anchorDate).1 {
-                sessions = try await APIClient.shared.sessions(start: start, end: end)
-            }
+            // Fetch a month-wide window (± a week of slack) so the month grid and
+            // the two-day timeline both have their sessions on hand, not just the
+            // current week.
+            let cal = Calendar.current
+            let monthStart = cal.date(from: cal.dateComponents([.year, .month], from: anchorDate)) ?? anchorDate
+            let start = cal.date(byAdding: .day, value: -7, to: monthStart) ?? monthStart
+            let end = cal.date(byAdding: .day, value: 7, to: cal.date(byAdding: .month, value: 1, to: monthStart) ?? anchorDate) ?? anchorDate
+            sessions = try await APIClient.shared.sessions(start: start, end: end)
         } catch {
             guard !isCancellation(error) else { return }
             print("[AppStore] refreshWeek failed: \(error)")

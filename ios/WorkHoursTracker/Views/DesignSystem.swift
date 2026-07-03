@@ -91,3 +91,20 @@ struct Chip: View {
             .foregroundStyle(color)
     }
 }
+
+/// Icon indicating where an entry came from (Siri / web / phone).
+struct SourceIcon: View {
+    var source: String
+    var body: some View {
+        Image(systemName: source == "siri" ? "mic.fill" : source == "web" ? "desktopcomputer" : "iphone")
+            .font(.caption).foregroundStyle(.tertiary)
+    }
+}
+
+/// The shared brand hue. Raw sessions use it solid; billed blocks use a light
+/// tint of it, so a raw block and the 15-minute billed block it caused read as
+/// visibly related.
+enum Palette {
+    static let raw = Color.indigo
+    static let billed = Color.indigo.opacity(0.22)
+}
