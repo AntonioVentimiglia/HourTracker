@@ -13,6 +13,7 @@ final class AppStore: ObservableObject {
     @Published var events: [ClockEvent] = []
     @Published var weekly: WeeklySummary?
     @Published var daily: DailySummary?
+    @Published var billingBlocks: [BillingBlock] = []
     @Published var errorMessage: String?
     @Published var isBusy = false
 
@@ -80,6 +81,9 @@ final class AppStore: ObservableObject {
         profile = nil
         sessions = []
         openSession = nil
+        billingBlocks = []
+        daily = nil
+        weekly = nil
     }
 
     func clockIn(note: String?) async {
@@ -102,6 +106,7 @@ final class AppStore: ObservableObject {
             await refreshWeek()
             await refreshDay()
             await refreshEvents()
+            await refreshBillingBlocks()
         }
         refreshTask = task
         await task.value
@@ -154,6 +159,27 @@ final class AppStore: ObservableObject {
             print("[AppStore] refreshEvents failed: \(error)")
             errorMessage = "Couldn't refresh recent events. Check your connection and that the server is running."
         }
+    }
+
+    func refreshBillingBlocks() async {
+        do {
+            // Blocks for the month around the anchor date, so day/week/month
+            // calendar views all have their blocks on hand.
+            let cal = Calendar.current
+            let anchor = cal.date(from: cal.dateComponents([.year, .month], from: anchorDate)) ?? anchorDate
+            let start = cal.date(byAdding: .month, value: -1, to: anchor) ?? anchor
+            let end = cal.date(byAdding: .month, value: 2, to: anchor) ?? anchorDate
+            billingBlocks = try await APIClient.shared.billingBlocks(start: start, end: end).blocks
+        } catch {
+            guard !isCancellation(error) else { return }
+            print("[AppStore] refreshBillingBlocks failed: \(error)")
+        }
+    }
+
+    /// Billing blocks whose start falls on the given calendar day (local zone).
+    func blocks(on day: Date) -> [BillingBlock] {
+        let cal = Calendar.current
+        return billingBlocks.filter { cal.isDate($0.start, inSameDayAs: day) }
     }
 
     private func isCancellation(_ error: Error) -> Bool {

@@ -12,45 +12,62 @@ struct RawDataTab: View {
                 }
                 .pickerStyle(.segmented).padding()
 
-                List {
-                    if showing == 0 {
-                        ForEach(store.sessions) { s in SessionRawRow(session: s) }
-                    } else {
-                        ForEach(store.events) { e in EventRawRow(event: e) }
+                ScrollView {
+                    LazyVStack(spacing: 10) {
+                        if showing == 0 {
+                            if store.sessions.isEmpty { emptyState("No sessions yet.") }
+                            ForEach(store.sessions) { SessionRawRow(session: $0) }
+                        } else {
+                            if store.events.isEmpty { emptyState("No events yet.") }
+                            ForEach(store.events) { EventRawRow(event: $0) }
+                        }
                     }
-                    Color.clear.frame(height: 120).listRowSeparator(.hidden)
+                    .padding(.horizontal)
+                    Color.clear.frame(height: 140)
                 }
-                .listStyle(.plain)
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Raw Data")
             .task { await store.refreshAll() }
         }
+    }
+
+    func emptyState(_ text: String) -> some View {
+        Text(text).font(.subheadline).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity).padding(.vertical, 40)
     }
 }
 
 struct SessionRawRow: View {
     var session: WorkSession
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        Card {
             HStack {
-                Text(session.id.prefix(8) + "…").font(.caption.monospaced()).foregroundStyle(.secondary)
+                Text(Format.timeRange(session)).font(.subheadline.weight(.semibold))
                 Spacer()
-                Text(session.status).font(.caption2.bold())
-                    .padding(.horizontal, 6).padding(.vertical, 2)
-                    .background(statusColor.opacity(0.2), in: Capsule())
-                    .foregroundStyle(statusColor)
+                Chip(text: session.status, color: statusColor)
             }
-            Text(Format.timeRange(session)).font(.subheadline.bold())
-            Text("Duration: \(Format.duration(session.durationSeconds))").font(.caption)
-            Text("TZ: \(session.startTimezoneId) · Source: \(session.source)")
-                .font(.caption2).foregroundStyle(.secondary)
-            if let note = session.note, !note.isEmpty { Text("Note: \(note)").font(.caption) }
+            HStack(spacing: 16) {
+                labeled("Duration", Format.duration(session.durationSeconds ?? session.liveDurationSeconds))
+                labeled("Source", session.source.capitalized)
+            }
+            if let note = session.note, !note.isEmpty {
+                labeled("Note", note)
+            }
+            Text(session.startTimezoneId).font(.caption2).foregroundStyle(.tertiary)
             if !session.validationWarnings.isEmpty {
-                Text("⚠︎ " + session.validationWarnings.joined(separator: ", "))
+                Label(session.validationWarnings.joined(separator: ", "),
+                      systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2).foregroundStyle(.orange)
             }
         }
-        .padding(.vertical, 4)
+    }
+
+    func labeled(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label.uppercased()).font(.caption2.weight(.bold)).foregroundStyle(.tertiary)
+            Text(value).font(.subheadline)
+        }
     }
 
     var statusColor: Color {
@@ -66,19 +83,26 @@ struct SessionRawRow: View {
 struct EventRawRow: View {
     var event: ClockEvent
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
+        Card {
             HStack {
-                Text(event.type).font(.subheadline.bold())
+                Text(prettyType).font(.subheadline.weight(.semibold))
                 Spacer()
                 SourceIcon(source: event.source)
+                Text(event.source.capitalized).font(.caption).foregroundStyle(.secondary)
             }
             if let d = ISO8601.date(event.timestampUtc) {
-                Text(Format.time(d)).font(.caption)
+                Text(Format.time(d)).font(.caption).foregroundStyle(.secondary)
             }
-            Text("Local date: \(event.localDate) · TZ: \(event.timezoneId)")
-                .font(.caption2).foregroundStyle(.secondary)
-            if let note = event.note, !note.isEmpty { Text("Note: \(note)").font(.caption) }
+            if let note = event.note, !note.isEmpty {
+                Text(note).font(.caption)
+            }
+            Text("\(event.localDate) · \(event.timezoneId)")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 4)
+    }
+
+    // "clock_in" -> "Clock In"
+    var prettyType: String {
+        event.type.split(separator: "_").map { $0.capitalized }.joined(separator: " ")
     }
 }

@@ -63,6 +63,35 @@ struct DailySummary: Codable {
     var notes: [String]
     var warnings: [String]
     var sessions: [WorkSession]
+
+    // Billing: raw = literal tracked time; billed = 15-minute-block total.
+    var rawHuman: String?
+    var billedHuman: String?
+    var rawSeconds: Int?
+    var billedSeconds: Int?
+    var blockCount: Int?
+    var blocks: [BillingBlock]?
+}
+
+/// One billed 15-minute increment, produced by the server's billing engine.
+struct BillingBlock: Codable, Identifiable {
+    var day: String
+    var startUtc: String
+    var endUtc: String
+    var sessionId: String?
+
+    var id: String { startUtc }
+    var start: Date { ISO8601.date(startUtc) ?? Date() }
+    var end: Date { ISO8601.date(endUtc) ?? start }
+}
+
+/// Response of GET /billing/blocks over an arbitrary range (calendar uses this).
+struct BillingBlocksResponse: Codable {
+    var blocks: [BillingBlock]
+    var billedHuman: String
+    var rawHuman: String
+    var billedSeconds: Int
+    var rawSeconds: Int
 }
 
 struct DayBreakdown: Codable, Identifiable {
@@ -81,6 +110,15 @@ struct WeeklySummary: Codable {
     var dailyBreakdown: [DayBreakdown]
     var notes: [String]
     var sessions: [WorkSession]
+
+    // Billing totals for the week.
+    var rawHuman: String?
+    var billedHuman: String?
+    var rawSeconds: Int?
+    var billedSeconds: Int?
+    var blockCount: Int?
+    var blocks: [BillingBlock]?
+    var billedByDay: [String: Int]?
 }
 
 struct AuthResponse: Codable {

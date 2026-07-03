@@ -1,4 +1,5 @@
 import { listSessions, allocateAcrossDays } from './sessions.js';
+import { billSessions } from './billing.js';
 import {
   dayBoundsUtc, weekBoundsUtc, monthBoundsUtc, humanDuration, DateTime,
 } from './time.js';
@@ -33,7 +34,25 @@ export function dailySummary(userId, dateIso, zone) {
     allocated += map[dateIso] || 0;
   }
   const base = summarize(sessions, zone);
-  return { date: dateIso, ...base, allocatedSeconds: allocated, allocatedHuman: humanDuration(allocated), sessions };
+  const bill = billSessions(sessions, zone);
+  return {
+    date: dateIso, ...base,
+    allocatedSeconds: allocated, allocatedHuman: humanDuration(allocated),
+    ...billFields(bill), sessions,
+  };
+}
+
+// Raw = literal tracked time; billed = the 15-minute-block total. Exposed side
+// by side so both sums are viewable (see billing.js for the rounding rules).
+function billFields(bill) {
+  return {
+    rawSeconds: bill.rawSeconds,
+    rawHuman: humanDuration(bill.rawSeconds),
+    billedSeconds: bill.billedSeconds,
+    billedHuman: humanDuration(bill.billedSeconds),
+    blockCount: bill.blocks.length,
+    blocks: bill.blocks,
+  };
 }
 
 export function weeklySummary(userId, weekStartIso, zone, weekStartsOn = 0) {
@@ -51,6 +70,7 @@ export function weeklySummary(userId, weekStartIso, zone, weekStartsOn = 0) {
   const longest = dayList.reduce((m, d) => (d.seconds > (m?.seconds || 0) ? d : m), null);
   const activeDays = dayList.filter((d) => d.seconds > 0).length || 1;
 
+  const bill = billSessions(sessions, zone);
   return {
     weekStart: DateTime.fromISO(startUtc, { zone: 'utc' }).setZone(zone).toISODate(),
     ...summarize(sessions, zone),
@@ -60,6 +80,8 @@ export function weeklySummary(userId, weekStartIso, zone, weekStartsOn = 0) {
     averagePerDaySeconds: Math.round(total / activeDays),
     averagePerDayHuman: humanDuration(Math.round(total / activeDays)),
     longestDay: longest,
+    ...billFields(bill),
+    billedByDay: bill.billedByDay,
     sessions,
   };
 }
@@ -76,12 +98,15 @@ export function monthlySummary(userId, monthIso, zone) {
     date, seconds, human: humanDuration(seconds),
   })).sort((a, b) => a.date.localeCompare(b.date));
   const total = heatmap.reduce((s, d) => s + d.seconds, 0);
+  const bill = billSessions(sessions, zone);
   return {
     month: monthIso,
     ...summarize(sessions, zone),
     totalSeconds: total,
     totalHuman: humanDuration(total),
     heatmap,
+    ...billFields(bill),
+    billedByDay: bill.billedByDay,
     sessions,
   };
 }

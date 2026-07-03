@@ -16,6 +16,14 @@ enum Format {
         return String(format: "%d:%02d", m, s)
     }
 
+    /// Decimal hours for billing, e.g. 0.25 / 1.50 — the standard way legal /
+    /// consulting time is expressed. Billed seconds are always a multiple of a
+    /// 15-minute block, so this lands on clean quarter-hour values.
+    static func decimalHours(_ seconds: Int?) -> String {
+        guard let seconds else { return "—" }
+        return String(format: "%.2f hr", Double(seconds) / 3600.0)
+    }
+
     static func time(_ date: Date) -> String {
         let f = DateFormatter(); f.dateFormat = "h:mm a"
         return f.string(from: date)

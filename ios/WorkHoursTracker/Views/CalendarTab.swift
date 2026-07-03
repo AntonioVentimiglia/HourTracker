@@ -15,19 +15,23 @@ struct CalendarTab: View {
                     ForEach(CalendarMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
-                .padding()
+                .padding([.horizontal, .top])
 
-                navHeader
+                navHeader.padding(.vertical, 12)
 
                 ScrollView {
-                    switch mode {
-                    case .day: DayView(sessions: daySessions, onTap: { editing = $0 })
-                    case .week: WeekView(onTap: { editing = $0 })
-                    case .month: MonthView()
+                    VStack(spacing: 12) {
+                        switch mode {
+                        case .day: DayView(day: store.anchorDate, onTap: { editing = $0 })
+                        case .week: WeekView(onTap: { editing = $0 })
+                        case .month: MonthView()
+                        }
                     }
+                    .padding(.horizontal)
                     Color.clear.frame(height: 140) // clock bar clearance
                 }
             }
+            .background(Color(.systemGroupedBackground))
             .navigationTitle("Calendar")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -47,21 +51,20 @@ struct CalendarTab: View {
 
     var navHeader: some View {
         HStack {
-            Button { shift(-1) } label: { Image(systemName: "chevron.left") }
+            Button { shift(-1) } label: { Image(systemName: "chevron.left").font(.headline) }
             Spacer()
-            VStack {
+            VStack(spacing: 2) {
                 Text(headerTitle).font(.headline)
-                Text(totalLabel).font(.subheadline).foregroundStyle(.indigo)
+                HStack(spacing: 6) {
+                    Text("Billed \(billedLabel)").foregroundStyle(.indigo).fontWeight(.semibold)
+                    Text("· Raw \(rawLabel)").foregroundStyle(.secondary)
+                }
+                .font(.subheadline)
             }
             Spacer()
-            Button { shift(1) } label: { Image(systemName: "chevron.right") }
+            Button { shift(1) } label: { Image(systemName: "chevron.right").font(.headline) }
         }
         .padding(.horizontal)
-    }
-
-    var daySessions: [WorkSession] {
-        let cal = Calendar.current
-        return store.sessions.filter { cal.isDate($0.start, inSameDayAs: store.anchorDate) }
     }
 
     var headerTitle: String {
@@ -74,11 +77,17 @@ struct CalendarTab: View {
         return f.string(from: store.anchorDate)
     }
 
-    var totalLabel: String {
+    var billedLabel: String {
         switch mode {
-        case .day: return "Today: \(store.daily?.allocatedHuman ?? "0m")"
-        case .week: return "Week: \(store.weekly?.totalHuman ?? "0m")"
-        case .month: return "Month total"
+        case .day: return Format.decimalHours(store.daily?.billedSeconds)
+        default: return Format.decimalHours(store.weekly?.billedSeconds)
+        }
+    }
+
+    var rawLabel: String {
+        switch mode {
+        case .day: return store.daily?.rawHuman ?? store.daily?.allocatedHuman ?? "0m"
+        default: return store.weekly?.rawHuman ?? store.weekly?.totalHuman ?? "0m"
         }
     }
 
@@ -87,6 +96,8 @@ struct CalendarTab: View {
         store.anchorDate = Calendar.current.date(byAdding: comp, value: n, to: store.anchorDate) ?? store.anchorDate
     }
 }
+
+// MARK: - Week
 
 struct WeekView: View {
     @EnvironmentObject var store: AppStore
@@ -99,93 +110,158 @@ struct WeekView: View {
     }
 
     var body: some View {
-        VStack(spacing: 8) {
-            ForEach(days, id: \.self) { day in
-                let cal = Calendar.current
-                let sessions = store.sessions.filter { cal.isDate($0.start, inSameDayAs: day) }
-                DayRow(day: day, sessions: sessions, onTap: onTap)
-            }
+        ForEach(days, id: \.self) { day in
+            let cal = Calendar.current
+            let sessions = store.sessions.filter { cal.isDate($0.start, inSameDayAs: day) }
+            DayRow(day: day, sessions: sessions, blocks: store.blocks(on: day), onTap: onTap)
         }
-        .padding(.horizontal)
     }
 }
 
 struct DayRow: View {
     var day: Date
     var sessions: [WorkSession]
+    var blocks: [BillingBlock]
     var onTap: (WorkSession) -> Void
 
-    var total: Int { sessions.reduce(0) { $0 + $1.liveDurationSeconds } }
+    var rawSeconds: Int { sessions.reduce(0) { $0 + $1.liveDurationSeconds } }
+    var billedSeconds: Int { blocks.count * 900 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(Format.weekday(day)).font(.subheadline.bold())
+        Card {
+            HStack(alignment: .firstTextBaseline) {
+                Text(Format.weekday(day)).font(.subheadline.weight(.bold))
                 Text(Format.dayNum(day)).foregroundStyle(.secondary)
                 Spacer()
-                if total > 0 { Text(Format.duration(total)).font(.subheadline).foregroundStyle(.indigo) }
+                if billedSeconds > 0 {
+                    Text(Format.decimalHours(billedSeconds))
+                        .font(.subheadline.weight(.semibold)).foregroundStyle(.indigo)
+                    Text("· \(Format.duration(rawSeconds))")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("—").foregroundStyle(.tertiary)
+                }
             }
-            ForEach(sessions) { s in SessionBlock(session: s).onTapGesture { onTap(s) } }
+            if !blocks.isEmpty { BlockStrip(blocks: blocks) }
+            ForEach(sessions) { s in
+                SessionRow(session: s).contentShape(Rectangle()).onTapGesture { onTap(s) }
+            }
         }
-        .padding(12)
-        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
     }
 }
 
+// MARK: - Day
+
 struct DayView: View {
-    var sessions: [WorkSession]
+    @EnvironmentObject var store: AppStore
+    var day: Date
     var onTap: (WorkSession) -> Void
+
+    var sessions: [WorkSession] {
+        store.sessions.filter { Calendar.current.isDate($0.start, inSameDayAs: day) }
+            .sorted { $0.start < $1.start }
+    }
+    var blocks: [BillingBlock] { store.blocks(on: day) }
+
     var body: some View {
-        VStack(spacing: 8) {
-            if sessions.isEmpty {
-                Text("No sessions this day. Tap + to add one, or say “clock me in.”")
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity).padding(.vertical, 40)
+        BilledVsRawHero(
+            billedHuman: Format.duration(blocks.count * 900),
+            billedSeconds: blocks.count * 900,
+            rawHuman: store.daily?.rawHuman ?? Format.duration(sessions.reduce(0) { $0 + $1.liveDurationSeconds }),
+            blockCount: blocks.count
+        )
+
+        Card(title: "Billed 15-minute blocks", systemImage: "square.grid.2x2") {
+            if blocks.isEmpty {
+                Text("No billable time this day.").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                BlockStrip(blocks: blocks)
+                ForEach(blocks) { b in
+                    HStack {
+                        Image(systemName: "checkmark.seal.fill").foregroundStyle(.indigo).font(.caption)
+                        Text("\(Format.time(b.start)) – \(Format.time(b.end))").font(.subheadline)
+                        Spacer()
+                        Text("0.25 hr").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
             }
-            ForEach(sessions) { s in SessionBlock(session: s).onTapGesture { onTap(s) } }
         }
-        .padding()
+
+        Card(title: "Clock in / out sessions", systemImage: "clock") {
+            if sessions.isEmpty {
+                Text("No sessions this day. Tap ＋ to add one, or say “clock me in.”")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center).padding(.vertical, 12)
+            } else {
+                ForEach(sessions) { s in
+                    SessionRow(session: s).contentShape(Rectangle()).onTapGesture { onTap(s) }
+                }
+            }
+        }
     }
 }
+
+// MARK: - Month
 
 struct MonthView: View {
     @EnvironmentObject var store: AppStore
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Daily totals")
-                .font(.headline).padding(.horizontal)
-            ForEach(store.weekly?.dailyBreakdown ?? []) { d in
-                HStack {
-                    Text(d.date).font(.subheadline)
-                    Spacer()
-                    Text(d.human).foregroundStyle(.indigo)
+        Card(title: "Daily totals (selected week)", systemImage: "chart.bar") {
+            let days = store.weekly?.dailyBreakdown ?? []
+            if days.isEmpty {
+                Text("No tracked time.").font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                ForEach(days) { d in
+                    HStack {
+                        Text(d.date).font(.subheadline)
+                        Spacer()
+                        if let billed = store.weekly?.billedByDay?[d.date], billed > 0 {
+                            Text(Format.decimalHours(billed)).foregroundStyle(.indigo).fontWeight(.semibold)
+                        }
+                        Text("· \(d.human)").font(.caption).foregroundStyle(.secondary)
+                    }
                 }
-                .padding(.horizontal)
             }
-            Text("Switch to Week for full session detail.")
-                .font(.caption).foregroundStyle(.secondary).padding()
+        }
+        Card(title: "Tip", systemImage: "info.circle") {
+            Text("Switch to Week or Day for session detail and the individual billed blocks.")
+                .font(.subheadline).foregroundStyle(.secondary)
         }
     }
 }
 
-struct SessionBlock: View {
+// MARK: - Shared pieces
+
+/// A compact horizontal strip of 15-minute billed blocks (each pip = one block).
+struct BlockStrip: View {
+    var blocks: [BillingBlock]
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(blocks) { _ in
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.indigo.opacity(0.6))
+                    .frame(height: 10)
+            }
+        }
+    }
+}
+
+struct SessionRow: View {
     var session: WorkSession
     var body: some View {
         HStack(spacing: 10) {
-            RoundedRectangle(cornerRadius: 3)
+            RoundedRectangle(cornerRadius: 2)
                 .fill(session.isOpen ? Color.green : Color.indigo)
-                .frame(width: 4)
-            VStack(alignment: .leading, spacing: 2) {
-                HStack {
-                    Text(Format.timeRange(session)).font(.subheadline.bold())
-                    if session.isOpen {
-                        Text("ACTIVE").font(.caption2.bold()).foregroundStyle(.green)
-                    }
+                .frame(width: 3)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(Format.timeRange(session)).font(.subheadline.weight(.semibold))
+                    if session.isOpen { Chip(text: "active", color: .green) }
                 }
                 Text(Format.duration(session.liveDurationSeconds))
                     .font(.caption).foregroundStyle(.secondary)
                 if let note = session.note, !note.isEmpty {
-                    Text(note).font(.caption).lineLimit(1)
+                    Text(note).font(.caption).lineLimit(1).foregroundStyle(.secondary)
                 }
                 if !session.validationWarnings.isEmpty {
                     Label(session.validationWarnings.joined(separator: ", "),
@@ -205,6 +281,6 @@ struct SourceIcon: View {
     var source: String
     var body: some View {
         Image(systemName: source == "siri" ? "mic.fill" : source == "web" ? "desktopcomputer" : "iphone")
-            .font(.caption).foregroundStyle(.secondary)
+            .font(.caption).foregroundStyle(.tertiary)
     }
 }

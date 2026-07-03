@@ -3,6 +3,8 @@ import db from '../db/schema.js';
 import { requireAuth } from '../middleware/auth.js';
 import * as S from '../services/sessions.js';
 import * as Sum from '../services/summaries.js';
+import { billSessions } from '../services/billing.js';
+import { humanDuration } from '../services/time.js';
 import { DateTime } from 'luxon';
 
 const router = Router();
@@ -118,6 +120,22 @@ router.get('/summaries/monthly', (req, res) => {
   const { zone } = userZone(req.userId);
   const month = req.query.month || DateTime.now().setZone(zone).toFormat('yyyy-LL');
   res.json(Sum.monthlySummary(req.userId, month, zone));
+});
+
+// ---- Billing blocks (for the calendar) ----
+router.get('/billing/blocks', (req, res) => {
+  const { zone } = userZone(req.userId);
+  const { start, end } = req.query;
+  const sessions = S.listSessions({ userId: req.userId, startUtc: start, endUtc: end });
+  const bill = billSessions(sessions, zone);
+  res.json({
+    blocks: bill.blocks,
+    billedSeconds: bill.billedSeconds,
+    billedHuman: humanDuration(bill.billedSeconds),
+    rawSeconds: bill.rawSeconds,
+    rawHuman: humanDuration(bill.rawSeconds),
+    billedByDay: bill.billedByDay,
+  });
 });
 
 // ---- Export ----

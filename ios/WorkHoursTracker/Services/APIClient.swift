@@ -128,6 +128,12 @@ actor APIClient {
         return try JSONDecoder().decode(R.self, from: data).events
     }
 
+    func billingBlocks(start: Date, end: Date) async throws -> BillingBlocksResponse {
+        let path = "/billing/blocks?start=\(ISO8601.string(start))&end=\(ISO8601.string(end))"
+        let data = try await request(path)
+        return try JSONDecoder().decode(BillingBlocksResponse.self, from: data)
+    }
+
     func dailySummary(date: String) async throws -> DailySummary {
         let data = try await request("/summaries/daily?date=\(date)")
         return try JSONDecoder().decode(DailySummary.self, from: data)
